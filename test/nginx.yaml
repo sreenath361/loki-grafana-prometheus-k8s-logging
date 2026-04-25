@@ -1,0 +1,157 @@
+---
+# 1. Persistent Volume Claim (shared logs)
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: logs-volume
+  namespace: monitoring
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 2Gi
+  storageClassName: gp2
+
+---
+# 2. Nginx App (real log generator)
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nginx-app
+  namespace: monitoring
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: nginx-app
+  template:
+    metadata:
+      labels:
+        app: nginx-app
+    spec:
+      containers:
+      - name: nginx
+        image: nginx:latest
+        ports:
+        - containerPort: 80
+        volumeMounts:
+        - name: log-storage
+          mountPath: /var/log/nginx
+      volumes:
+      - name: log-storage
+        persistentVolumeClaim:
+          claimName: logs-volume
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: nginx-app
+  namespace: monitoring
+spec:
+  selector:
+    app: nginx-app
+  ports:
+  - port: 80
+    targetPort: 80
+
+---
+# 3. Traffic Generator (creates real requests)
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: traffic-generator
+  namespace: monitoring
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: traffic-generator
+  template:
+    metadata:
+      labels:
+        app: traffic-generator
+    spec:
+      containers:
+      - name: curl
+        image: curlimages/curl:latest
+        command: ["/bin/sh", "-c"]
+        args:
+          - |
+            while true; do
+              curl -s http://nginx-app.monitoring.svc.cluster.local > /dev/null;
+              curl -s http://nginx-app.monitoring.svc.cluster.local/invalid > /dev/null;
+              sleep 0.2;
+            done
+
+---
+# 4. Promtail Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: promtail
+  namespace: monitoring
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: promtail
+  template:
+    metadata:
+      labels:
+        app: promtail
+    spec:
+      containers:
+      - name: promtail
+        image: grafana/promtail:3.4.3
+        args:
+        - -config.file=/etc/promtail/config.yaml
+        volumeMounts:
+        - name: log-storage
+          mountPath: /var/log/nginx
+        - name: promtail-config
+          mountPath: /etc/promtail
+      volumes:
+      - name: log-storage
+        persistentVolumeClaim:
+          claimName: logs-volume
+      - name: promtail-config
+        configMap:
+          name: promtail-config
+
+---
+# 5. Promtail ConfigMap (parsing nginx logs)
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: promtail-config
+  namespace: monitoring
+data:
+  config.yaml: |
+    server:
+      http_listen_port: 9080
+      grpc_listen_port: 0
+      log_level: info
+
+    positions:
+      filename: /tmp/positions.yaml
+
+    clients:
+      - url: http://loki-gateway.monitoring.svc.cluster.local/loki/api/v1/push
+
+    scrape_configs:
+      - job_name: nginx-logs
+        static_configs:
+          - targets:
+              - localhost
+            labels:
+              job: nginx
+              __path__: /var/log/nginx/*.log
+
+        pipeline_stages:
+          - regex:
+              expression: '^(?P<remote_addr>[^ ]*) - - \[(?P<time_local>.*?)\] "(?P<method>\w+) (?P<request>.*?) HTTP/(?P<http_version>.*?)" (?P<status>\d+) (?P<body_bytes_sent>\d+) "(?P<http_referer>.*?)" "(?P<http_user_agent>.*?)"'
+          - labels:
+              method:
+              status:
