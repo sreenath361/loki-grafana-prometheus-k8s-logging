@@ -21,6 +21,10 @@ Installing loki if custom-values.yaml file isn't present
 ***Some parameters may be missing; best to refer to the video tutorial for complete setup instructions).***
 
 ```bash
+helm install loki grafana/loki --version 7.0.0 --namespace monitoring --values loki-grafana-prometheus-k8s-logging/loki/loki-values.yaml
+```
+
+```bash
 helm install loki grafana/loki --version 6.29.0 --namespace monitoring \
   --set deploymentMode=SingleBinary \
   --set loki.auth_enabled=false \
@@ -64,6 +68,10 @@ Installing kube-prometheus-stack if custom-values.yaml file isn't present. This 
 ***Some parameters may be missing; best to refer to the video tutorial for complete setup instructions).***
 
 ```bash
+helm install prometheus prometheus-community/kube-prometheus-stack --version 84.0.1 --namespace monitoring --values loki-grafana-prometheus-k8s-logging/prometheus/prometheus-values.yaml
+```
+
+```bash
 helm install prometheus prometheus-community/kube-prometheus-stack --version 45.7.1 \
   --namespace monitoring \
   --set "grafana.additionalDataSources[0].name=Loki" \
@@ -91,5 +99,5 @@ kubectl get secret -n monitoring prometheus-grafana -o jsonpath="{.data.admin-pa
 port-forward
 
 ```bash
-kubectl port-forward -n monitoring svc/grafana 3000:80
+kubectl port-forward -n monitoring svc/prometheus-grafana 3000:80
 ```
